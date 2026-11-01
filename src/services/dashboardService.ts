@@ -329,10 +329,8 @@ export async function getDashboardData(): Promise<DashboardData> {
     const uniqueCustomers = new Set<string>();
 
     bills.forEach((bill) => {
-        const customerKey = bill.customerPhone.trim()
-            ? bill.customerPhone.trim()
-            : bill.customerName.trim().toLowerCase();
-
+        const customerPhone = (bill.customerPhone ?? "").trim();
+        const customerKey = customerPhone;
         if (
             customerKey &&
             customerKey.toLowerCase() !== "walk-in customer"
