@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
     Menu,
     X,
-    Sprout,
     House,
     Bell,
     Package,
@@ -75,15 +74,14 @@ function MainLayout() {
                         </button>
 
                         <div className="flex min-w-0 flex-1 items-center gap-2">
-                            <Sprout className="h-6 w-6 shrink-0 text-green-100" />
 
                             <div className="min-w-0">
                                 <p className="truncate text-[14px] font-bold leading-5 text-white">
-                                    New Balaji Ruthu Depo
+                                    Balaji Stock
                                 </p>
 
                                 <p className="truncate text-[8px] leading-3 text-green-100">
-                                    Pesticides | Insecticides | Fungicides | Herbicides
+                                    Retail Management
                                 </p>
                             </div>
                         </div>

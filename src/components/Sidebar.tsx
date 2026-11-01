@@ -9,7 +9,9 @@ import {
     CreditCard,
     BarChart3,
     Settings,
+    LogOut,
 } from "lucide-react";
+
 import { useNavigate, NavLink } from "react-router-dom";
 import { logoutUser } from "../services/authService";
 import { useAuth } from "./AuthProvider";
@@ -34,7 +36,6 @@ function Sidebar({
     mobileOpen = false,
     onClose,
 }: SidebarProps) {
-    // Hooks must be called inside the component.
     const { shopUser } = useAuth();
     const navigate = useNavigate();
 
@@ -51,12 +52,12 @@ function Sidebar({
     return (
         <aside
             className={`
-        fixed inset-y-0 left-0 z-50 flex w-64 flex-col
-        border-r border-green-100 bg-white
-        transition-transform duration-300
-        lg:static lg:translate-x-0
-        ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
-      `}
+                fixed inset-y-0 left-0 z-50 flex w-64 flex-col
+                border-r border-green-100 bg-white
+                transition-transform duration-300
+                lg:static lg:translate-x-0
+                ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+            `}
         >
             {/* Logo / Shop Name */}
             <div className="border-b border-green-100 px-6 py-5">
@@ -67,10 +68,10 @@ function Sidebar({
 
                     <div>
                         <h1 className="text-sm font-bold text-green-700">
-                            NEW BALAJI
+                            BALAJI STOCK
                         </h1>
                         <p className="text-sm font-semibold text-slate-700">
-                            RUTHU DEPO
+                            RETAIL MANAGEMENT
                         </p>
                     </div>
                 </div>
@@ -105,38 +106,42 @@ function Sidebar({
                         );
                     })}
                 </div>
+
+                {/* Settings */}
+                <div className="mt-5 border-t border-green-100 pt-4">
+                    <NavLink
+                        to="/settings"
+                        onClick={onClose}
+                        className={({ isActive }) =>
+                            `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition ${isActive
+                                ? "bg-green-600 text-white"
+                                : "text-slate-600 hover:bg-green-50 hover:text-green-700"
+                            }`
+                        }
+                    >
+                        <Settings className="h-5 w-5" />
+                        <span>Settings</span>
+                    </NavLink>
+                </div>
+
+                {/* Logout - Directly below Settings */}
+                <div className="mt-2 px-1">
+                    <button
+                        type="button"
+                        onClick={handleLogout}
+                        className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 transition hover:bg-red-50"
+                    >
+                        <LogOut className="h-5 w-5" />
+                        <span>Logout</span>
+                    </button>
+                </div>
             </nav>
 
-            {/* Settings */}
-            <div className="border-t border-green-100 p-3">
-                <NavLink
-                    to="/settings"
-                    onClick={onClose}
-                    className={({ isActive }) =>
-                        `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition ${isActive
-                            ? "bg-green-600 text-white"
-                            : "text-slate-600 hover:bg-green-50 hover:text-green-700"
-                        }`
-                    }
-                >
-                    <Settings className="h-5 w-5" />
-                    <span>Settings</span>
-                </NavLink>
-            </div>
-
-            {/* Shop User and Logout */}
-            <div className="mt-auto border-t border-neutral-200 p-4">
-                <p className="mb-2 text-xs text-neutral-500">
+            {/* Shop User */}
+            <div className="border-t border-neutral-200 p-4">
+                <p className="text-xs text-neutral-500">
                     {shopUser?.displayName ?? "Shop"}
                 </p>
-
-                <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                >
-                    Logout
-                </button>
             </div>
         </aside>
     );

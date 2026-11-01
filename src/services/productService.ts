@@ -14,14 +14,36 @@ import {
 
 import { auth, db } from "../firebase/config";
 
+// ==========================================
+// PRODUCT INTERFACES
+// ==========================================
+
 export interface ProductData {
     name: string;
     category: string;
     manufacturer?: string;
+
+    // Product identification
+    sku?: string;
+    barcode?: string;
+
+    // Product details
     unit: string;
+    description?: string;
+    supplier?: string;
+
+    // Pricing
+    purchasePrice?: number;
     sellingPrice: number;
+    mrp?: number;
+    gstRate?: number;
+
+    // Inventory
     minimumStock: number;
     currentStock: number;
+    //image
+    imageUrl?: string;
+
     active: boolean;
 }
 
@@ -29,9 +51,19 @@ export interface Product extends ProductData {
     id: string;
 }
 
-/**
- * Get the shop ID of the currently logged-in user.
- */
+// Fields entered when creating a product.
+// Stock and active status are managed by the service.
+export type NewProductData = Omit<
+    ProductData,
+    "currentStock" | "active"
+> & {
+    openingStock?: number;
+};
+
+// ==========================================
+// SHOP MANAGEMENT
+// ==========================================
+
 const getCurrentShopId = async (): Promise<string> => {
     const user = auth.currentUser;
 
@@ -56,9 +88,10 @@ const getCurrentShopId = async (): Promise<string> => {
     return shopId;
 };
 
-/**
- * Verify that a product belongs to the current shop.
- */
+// ==========================================
+// PRODUCT OWNERSHIP
+// ==========================================
+
 const verifyProductOwnership = async (
     productId: string,
     shopId: string
@@ -75,9 +108,80 @@ const verifyProductOwnership = async (
     }
 };
 
-/**
- * Find a product by name within the current shop.
- */
+// ==========================================
+// DATA CLEANING
+// ==========================================
+
+// Avoid storing undefined values in Firestore.
+const cleanProductData = <T extends Record<string, unknown>>(
+    data: T
+): Partial<T> => {
+    return Object.fromEntries(
+        Object.entries(data).filter(
+            ([, value]) => value !== undefined
+        )
+    ) as Partial<T>;
+};
+
+const normalizeSku = (value?: string): string =>
+    value?.trim().toUpperCase() ?? "";
+
+const normalizeBarcode = (value?: string): string =>
+    value?.trim() ?? "";
+
+// ==========================================
+// IDENTIFIER DUPLICATE CHECK
+// ==========================================
+
+const verifyUniqueIdentifiers = async (
+    shopId: string,
+    identifiers: {
+        sku?: string;
+        barcode?: string;
+    },
+    excludeProductId?: string
+): Promise<void> => {
+    const sku = normalizeSku(identifiers.sku);
+    const barcode = normalizeBarcode(identifiers.barcode);
+
+    if (!sku && !barcode) return;
+
+    const productsQuery = query(
+        collection(db, "products"),
+        where("shopId", "==", shopId)
+    );
+
+    const snapshot = await getDocs(productsQuery);
+
+    for (const productDoc of snapshot.docs) {
+        if (productDoc.id === excludeProductId) continue;
+
+        const existing = productDoc.data();
+
+        if (
+            sku &&
+            normalizeSku(existing.sku) === sku
+        ) {
+            throw new Error(
+                `SKU "${sku}" is already used by another product.`
+            );
+        }
+
+        if (
+            barcode &&
+            normalizeBarcode(existing.barcode) === barcode
+        ) {
+            throw new Error(
+                `Barcode "${barcode}" is already assigned to another product.`
+            );
+        }
+    }
+};
+
+// ==========================================
+// FIND PRODUCT BY NAME
+// ==========================================
+
 export const findProductByName = async (
     name: string
 ): Promise<Product | null> => {
@@ -90,12 +194,14 @@ export const findProductByName = async (
 
     const snapshot = await getDocs(productsQuery);
 
-    const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normalized = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
 
     for (const productDoc of snapshot.docs) {
         const data = productDoc.data() as ProductData;
 
-        const existing = data.name
+        const existing = (data.name || "")
             .toLowerCase()
             .replace(/[^a-z0-9]/g, "");
 
@@ -110,9 +216,78 @@ export const findProductByName = async (
     return null;
 };
 
-/**
- * Get all products belonging to the current shop.
- */
+// ==========================================
+// FIND PRODUCT BY BARCODE
+// ==========================================
+
+export const findProductByBarcode = async (
+    barcode: string
+): Promise<Product | null> => {
+    const shopId = await getCurrentShopId();
+    const normalizedBarcode = normalizeBarcode(barcode);
+
+    if (!normalizedBarcode) return null;
+
+    const productsQuery = query(
+        collection(db, "products"),
+        where("shopId", "==", shopId)
+    );
+
+    const snapshot = await getDocs(productsQuery);
+
+    for (const productDoc of snapshot.docs) {
+        const data = productDoc.data() as ProductData;
+
+        if (
+            normalizeBarcode(data.barcode) === normalizedBarcode
+        ) {
+            return {
+                id: productDoc.id,
+                ...data,
+            };
+        }
+    }
+
+    return null;
+};
+
+// ==========================================
+// FIND PRODUCT BY SKU
+// ==========================================
+
+export const findProductBySku = async (
+    sku: string
+): Promise<Product | null> => {
+    const shopId = await getCurrentShopId();
+    const normalizedSku = normalizeSku(sku);
+
+    if (!normalizedSku) return null;
+
+    const productsQuery = query(
+        collection(db, "products"),
+        where("shopId", "==", shopId)
+    );
+
+    const snapshot = await getDocs(productsQuery);
+
+    for (const productDoc of snapshot.docs) {
+        const data = productDoc.data() as ProductData;
+
+        if (normalizeSku(data.sku) === normalizedSku) {
+            return {
+                id: productDoc.id,
+                ...data,
+            };
+        }
+    }
+
+    return null;
+};
+
+// ==========================================
+// GET ALL SHOP PRODUCTS
+// ==========================================
+
 export const getProducts = async (): Promise<Product[]> => {
     const shopId = await getCurrentShopId();
 
@@ -125,23 +300,77 @@ export const getProducts = async (): Promise<Product[]> => {
 
     return snapshot.docs.map((productDoc) => ({
         id: productDoc.id,
-        ...(productDoc.data() as ProductData),
-    }));
+        ...productDoc.data(),
+    })) as Product[];
 };
 
-/**
- * Add a new product to the current shop.
- */
+// ==========================================
+// ADD PRODUCT
+// ==========================================
+
 export const addProduct = async (
-    product: Omit<ProductData, "currentStock" | "active">
+    product: NewProductData
 ): Promise<string> => {
     const shopId = await getCurrentShopId();
 
-    const productData: ProductData = {
+    if (!product.name.trim()) {
+        throw new Error("Product name is required.");
+    }
+
+    if (!product.category.trim()) {
+        throw new Error("Product category is required.");
+    }
+
+    if (!product.unit.trim()) {
+        throw new Error("Product unit is required.");
+    }
+
+    if (product.sellingPrice < 0) {
+        throw new Error("Selling price cannot be negative.");
+    }
+    if (
+        product.openingStock !== undefined &&
+        (!Number.isFinite(product.openingStock) ||
+            product.openingStock < 0)
+    ) {
+        throw new Error("Opening stock cannot be negative or invalid.");
+    }
+
+    if (
+        product.purchasePrice !== undefined &&
+        product.purchasePrice < 0
+    ) {
+        throw new Error("Purchase price cannot be negative.");
+    }
+
+    if (product.mrp !== undefined && product.mrp < 0) {
+        throw new Error("MRP cannot be negative.");
+    }
+
+    if (
+        product.gstRate !== undefined &&
+        (product.gstRate < 0 || product.gstRate > 100)
+    ) {
+        throw new Error("GST rate must be between 0 and 100.");
+    }
+
+    await verifyUniqueIdentifiers(shopId, {
+        sku: product.sku,
+        barcode: product.barcode,
+    });
+    const { openingStock = 0 } = product;
+    const productData = cleanProductData({
         ...product,
-        currentStock: 0,
+        name: product.name.trim(),
+        category: product.category.trim(),
+        manufacturer: product.manufacturer?.trim(),
+        sku: product.sku?.trim().toUpperCase(),
+        barcode: product.barcode?.trim(),
+        description: product.description?.trim(),
+        supplier: product.supplier?.trim(),
+        currentStock: openingStock,
         active: true,
-    };
+    });
 
     const productRef = await addDoc(
         collection(db, "products"),
@@ -156,9 +385,10 @@ export const addProduct = async (
     return productRef.id;
 };
 
-/**
- * Update an existing product.
- */
+// ==========================================
+// UPDATE PRODUCT
+// ==========================================
+
 export const updateProduct = async (
     productId: string,
     updates: Partial<Omit<ProductData, "currentStock">>
@@ -167,17 +397,59 @@ export const updateProduct = async (
 
     await verifyProductOwnership(productId, shopId);
 
-    const productRef = doc(db, "products", productId);
+    if (updates.sellingPrice !== undefined &&
+        updates.sellingPrice < 0) {
+        throw new Error("Selling price cannot be negative.");
+    }
 
-    await updateDoc(productRef, {
+    if (
+        updates.purchasePrice !== undefined &&
+        updates.purchasePrice < 0
+    ) {
+        throw new Error("Purchase price cannot be negative.");
+    }
+
+    if (updates.mrp !== undefined && updates.mrp < 0) {
+        throw new Error("MRP cannot be negative.");
+    }
+
+    if (
+        updates.gstRate !== undefined &&
+        (updates.gstRate < 0 || updates.gstRate > 100)
+    ) {
+        throw new Error("GST rate must be between 0 and 100.");
+    }
+
+    await verifyUniqueIdentifiers(
+        shopId,
+        {
+            sku: updates.sku,
+            barcode: updates.barcode,
+        },
+        productId
+    );
+
+    const cleanedUpdates = cleanProductData({
         ...updates,
+        name: updates.name?.trim(),
+        category: updates.category?.trim(),
+        manufacturer: updates.manufacturer?.trim(),
+        sku: updates.sku?.trim().toUpperCase(),
+        barcode: updates.barcode?.trim(),
+        description: updates.description?.trim(),
+        supplier: updates.supplier?.trim(),
+    });
+
+    await updateDoc(doc(db, "products", productId), {
+        ...cleanedUpdates,
         updatedAt: serverTimestamp(),
     });
 };
 
-/**
- * Deactivate a product instead of deleting it.
- */
+// ==========================================
+// DEACTIVATE PRODUCT
+// ==========================================
+
 export const deactivateProduct = async (
     productId: string
 ): Promise<void> => {
@@ -191,9 +463,10 @@ export const deactivateProduct = async (
     });
 };
 
-/**
- * Reactivate a previously deactivated product.
- */
+// ==========================================
+// REACTIVATE PRODUCT
+// ==========================================
+
 export const reactivateProduct = async (
     productId: string
 ): Promise<void> => {
@@ -207,9 +480,10 @@ export const reactivateProduct = async (
     });
 };
 
-/**
- * Delete a product belonging to the current shop.
- */
+// ==========================================
+// DELETE PRODUCT
+// ==========================================
+
 export const deleteProduct = async (
     productId: string
 ): Promise<void> => {

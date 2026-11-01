@@ -332,7 +332,7 @@ Thank you for your business.`;
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                             <h1 className="text-2xl font-bold">
-                                New Balaji Ruthu Depo
+                                Balaji Pos
                             </h1>
 
                             <p className="mt-1 text-sm text-green-100">

@@ -1,9 +1,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-    ArrowLeft, ArrowRight, Barcode, CheckCircle2, CreditCard, Minus, Package, Plus, Printer, Search, Share2,
-    ShoppingCart, Wallet, Zap,
+    ArrowLeft, ArrowRight, CheckCircle2, CreditCard, Minus, Package, Plus, Printer, Search, Share2,
+    ShoppingCart, Wallet, Zap, ScanBarcode,
 } from "lucide-react";
+import BarcodeScanner from "../../components/BarcodeScanner";
 
 import { getProducts, type Product } from "../../services/productService";
 import {
@@ -51,7 +52,7 @@ export default function BillingMobile() {
     const [cart, setCart] = useState<CartItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-
+    const [showScanner, setShowScanner] = useState(false);
     const [step, setStep] = useState(1);
     const [search, setSearch] = useState("");
 
@@ -128,6 +129,7 @@ export default function BillingMobile() {
             ? Math.max(0, cashReceived - subtotal)
             : 0;
 
+
     const addToCart = (product: Product) => {
         if (product.currentStock <= 0) {
             alert(`${product.name} is out of stock.`);
@@ -172,8 +174,31 @@ export default function BillingMobile() {
                 },
             ];
         });
+
         setSearch("");
     };
+
+    const handleScannedBarcode = (barcode: string) => {
+        const scannedCode = barcode.trim().replace(/\s/g, "");
+
+        const product = products.find(
+            (item) =>
+                item.barcode?.trim().replace(/\s/g, "") === scannedCode
+        );
+
+        if (!product) {
+            alert(`Product not found for barcode: ${barcode}`);
+            return;
+        }
+
+        if (product.currentStock <= 0) {
+            alert(`${product.name} is out of stock.`);
+            return;
+        }
+
+        addToCart(product);
+    };
+
 
     const changeQuantity = (
         productId: string,
@@ -507,7 +532,7 @@ export default function BillingMobile() {
                                 </span>
                             </div>
 
-                            <div className="flex items-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-3 py-3.5 focus-within:border-[#087653]">
+                            <div className="flex h-11 items-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-1 focus-within:border-[#087653]">
                                 <Search size={21} className="text-slate-500" />
 
                                 <input
@@ -517,7 +542,14 @@ export default function BillingMobile() {
                                     className="min-w-0 flex-1 bg-transparent text-sm outline-none"
                                 />
 
-                                <Barcode size={22} className="text-[#087653]" />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowScanner((current) => !current)}
+                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#087653] text-white"
+                                    aria-label="Open barcode scanner"
+                                >
+                                    <ScanBarcode size={21} />
+                                </button>
                             </div>
 
                             {search.trim() && (
@@ -526,6 +558,12 @@ export default function BillingMobile() {
                                 </p>
                             )}
                         </section>
+                        {showScanner && (
+                            <BarcodeScanner
+                                onScan={handleScannedBarcode}
+                                onClose={() => setShowScanner(false)}
+                            />
+                        )}
 
                         {/* Search results */}
                         {search.trim() && (
@@ -742,6 +780,7 @@ export default function BillingMobile() {
                         </div>
                     </>
                 )}
+
 
                 {/* STEP 3: PAYMENT */}
                 {step === 3 && !savedReceipt && (
