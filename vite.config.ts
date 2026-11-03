@@ -11,9 +11,13 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["icon-192.png", "icon-512.png"],
-      manifest: false, // we already have public/manifest.json
+      manifest: false,
+
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,svg,woff2}"],
+
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/firestore\.googleapis\.com\/.*/i,
@@ -27,6 +31,7 @@ export default defineConfig({
       },
     }),
   ],
+
   server: {
     host: "0.0.0.0",
     port: 5173,
