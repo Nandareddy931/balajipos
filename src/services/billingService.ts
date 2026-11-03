@@ -8,8 +8,7 @@ import {
     query,
     serverTimestamp,
     where,
-    writeBatch,
-    increment,
+    runTransaction,
 } from "firebase/firestore";
 
 import { auth, db } from "../firebase/config";
@@ -59,16 +58,28 @@ const billsCollection = collection(db, "bills");
 // CURRENT SHOP
 // ============================================================
 
-const getCurrentShopId = (): string => {
+const getCurrentShopId = async (): Promise<string> => {
     const user = auth.currentUser;
 
     if (!user) {
         throw new Error("Please log in first.");
     }
 
-    // In our signup architecture, shopId = Firebase Auth UID.
-    // This avoids a Firestore read and supports offline billing.
-    return user.uid;
+    const userSnapshot = await getDoc(
+        doc(db, "users", user.uid)
+    );
+
+    if (!userSnapshot.exists()) {
+        throw new Error("User profile not found.");
+    }
+
+    const shopId = userSnapshot.data().shopId;
+
+    if (typeof shopId !== "string" || !shopId) {
+        throw new Error("Shop ID not found.");
+    }
+
+    return shopId;
 };
 
 // ============================================================
@@ -179,80 +190,170 @@ export const isBillNumberExists = async (
 export const saveBill = async (
     bill: BillData
 ): Promise<string> => {
-    const errors = validateBill(bill);
+    validateBill(bill);
 
-    if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
-    }
+    const shopId = await getCurrentShopId();
 
-    const shopId = getCurrentShopId();
-
-    // Check duplicate bill number when online.
-    if (navigator.onLine) {
-        try {
-            const exists = await isBillNumberExists(bill.billNumber);
-
-            if (exists) {
-                throw new Error(
-                    `Bill number ${bill.billNumber} already exists. Please generate a new bill number.`
-                );
-            }
-        } catch (err) {
-            if (
-                err instanceof Error &&
-                err.message.includes("already exists")
-            ) {
-                throw err;
-            }
-
-            console.warn("Duplicate check skipped:", err);
-        }
-    }
-
-    const batch = writeBatch(db);
-
-    // 1. Create bill document.
+    // Generate a bill document reference.
     const billRef = doc(collection(db, "bills"));
     const billId = billRef.id;
 
-    batch.set(billRef, {
-        ...bill,
-        id: billId,
-        shopId,
-        createdAt: serverTimestamp(),
-    });
+    // Combine repeated product entries before checking stock.
+    const groupedItems = new Map<
+        string,
+        {
+            productId: string;
+            productName: string;
+            quantity: number;
+            unit: string;
+            amount: number;
+        }
+    >();
 
-    // 2. Decrement stock and record movements.
     for (const item of bill.items) {
-        const productRef = doc(db, "products", item.productId);
+        const existing = groupedItems.get(item.productId);
 
-        batch.update(productRef, {
-            currentStock: increment(-item.quantity),
-            updatedAt: serverTimestamp(),
-        });
-
-        const movementRef = doc(collection(db, "stockMovements"));
-
-        batch.set(movementRef, {
-            shopId,
-            productId: item.productId,
-            product: item.productName,
-            type: "SALE",
-            quantity: -item.quantity,
-            unit: item.unit,
-            rate: item.sellingPrice,
-            amount: item.amount,
-            billId,
-            billNumber: bill.billNumber,
-            customerName: bill.customerName,
-            customerPhone: bill.customerPhone,
-            movementDate: bill.billDate,
-            createdAt: serverTimestamp(),
-        });
+        if (existing) {
+            existing.quantity += item.quantity;
+            existing.amount += item.amount;
+        } else {
+            groupedItems.set(item.productId, {
+                productId: item.productId,
+                productName: item.productName,
+                quantity: item.quantity,
+                unit: item.unit,
+                amount: item.amount,
+            });
+        }
     }
 
-    // 3. Commit all writes together.
-    await batch.commit();
+    const items = Array.from(groupedItems.values());
+
+    const productRefs = items.map((item) => ({
+        item,
+        ref: doc(db, "products", item.productId),
+    }));
+
+    const movementRefs = items.map((item) => ({
+        item,
+        ref: doc(
+            db,
+            "stockMovements",
+            `${billId}_${item.productId}`
+        ),
+    }));
+
+    await runTransaction(db, async (transaction) => {
+        // ----------------------------------
+        // STEP 1: READ ALL DOCUMENTS
+        // ----------------------------------
+
+        const existingBill = await transaction.get(billRef);
+
+        if (existingBill.exists()) {
+            throw new Error("This bill has already been saved.");
+        }
+
+        const productSnapshots = [];
+
+        for (const { item, ref } of productRefs) {
+            const snapshot = await transaction.get(ref);
+
+            if (!snapshot.exists()) {
+                throw new Error(
+                    `Product "${item.productName}" no longer exists.`
+                );
+            }
+
+            const data = snapshot.data();
+
+            if (data.shopId !== shopId) {
+                throw new Error(
+                    `You do not have access to "${item.productName}".`
+                );
+            }
+
+            if (data.active === false) {
+                throw new Error(
+                    `"${item.productName}" is inactive.`
+                );
+            }
+
+            const currentStock = data.currentStock;
+
+            if (
+                typeof currentStock !== "number" ||
+                !Number.isFinite(currentStock) ||
+                currentStock < 0
+            ) {
+                throw new Error(
+                    `Invalid stock value for "${item.productName}".`
+                );
+            }
+
+            if (item.quantity > currentStock) {
+                throw new Error(
+                    `Insufficient stock for ${item.productName}. Available: ${currentStock}, requested: ${item.quantity}.`
+                );
+            }
+
+            productSnapshots.push({
+                item,
+                ref,
+                currentStock,
+            });
+        }
+
+        for (const { item, ref } of movementRefs) {
+            const movementSnapshot = await transaction.get(ref);
+
+            if (movementSnapshot.exists()) {
+                throw new Error(
+                    `Stock movement already exists for ${item.productName}.`
+                );
+            }
+        }
+
+        // ----------------------------------
+        // STEP 2: WRITE ONLY AFTER ALL READS
+        // ----------------------------------
+
+        transaction.set(billRef, {
+            ...bill,
+            id: billId,
+            shopId,
+            createdAt: serverTimestamp(),
+        });
+
+        for (const {
+            item,
+            ref,
+            currentStock,
+        } of productSnapshots) {
+            transaction.update(ref, {
+                currentStock: currentStock - item.quantity,
+                updatedAt: serverTimestamp(),
+            });
+        }
+
+        for (const { item, ref } of movementRefs) {
+            transaction.set(ref, {
+                shopId,
+                productId: item.productId,
+                productName: item.productName,
+                type: "SALE",
+                quantity: -item.quantity,
+                unit: item.unit,
+                amount: item.amount,
+                billId,
+                billNumber: bill.billNumber,
+                customerName: bill.customerName,
+                customerPhone: bill.customerPhone,
+                movementDate: bill.billDate,
+                createdAt: serverTimestamp(),
+            });
+        }
+    });
 
     return billId;
 };
@@ -264,7 +365,7 @@ export const saveBill = async (
 export const getBillById = async (
     billId: string
 ): Promise<Bill | null> => {
-    const shopId = getCurrentShopId();
+    const shopId = await getCurrentShopId();
 
     const billRef = doc(db, "bills", billId);
     const snapshot = await getDoc(billRef);
@@ -293,7 +394,7 @@ export const getBillById = async (
 // ============================================================
 
 export const getBills = async (): Promise<Bill[]> => {
-    const shopId = getCurrentShopId();
+    const shopId = await getCurrentShopId();
 
     const billsQuery = query(
         billsCollection,
@@ -322,7 +423,7 @@ export const getBills = async (): Promise<Bill[]> => {
 export const searchBillsByCustomerPhone = async (
     phone: string
 ): Promise<Bill[]> => {
-    const shopId = getCurrentShopId();
+    const shopId = await getCurrentShopId();
 
     const billsQuery = query(
         billsCollection,

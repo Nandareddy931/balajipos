@@ -33,8 +33,6 @@ import {
     type PaymentStatus,
 } from "../services/billingService";
 
-import { deductStockForBill } from "../services/stockService";
-
 
 // ============================================================
 // TYPES
@@ -633,33 +631,8 @@ function Billing() {
 
 
             // Save bill to Firestore
-            const billId =
-                await saveBill(bill);
+            await saveBill(bill);
 
-            console.log(
-                "Bill saved successfully:",
-                billId
-            );
-
-
-            // ----------------------------------------------------
-            // DEDUCT STOCK
-            // ----------------------------------------------------
-
-            await deductStockForBill(
-                billId,
-                newBillNumber,
-                cart.map((item) => ({
-                    productId:
-                        item.productId,
-
-                    productName:
-                        item.productName,
-
-                    quantity:
-                        item.quantity,
-                }))
-            );
 
             console.log(
                 "Stock deducted successfully."
@@ -2278,7 +2251,7 @@ Thank you for your business.`;
 
                                         {savingBill
                                             ? "Saving Bill..."
-                                            : "Complete Sale"}
+                                            : "Complete Sale (F8)"}
 
                                     </span>
 

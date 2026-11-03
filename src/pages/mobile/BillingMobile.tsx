@@ -551,19 +551,19 @@ export default function BillingMobile() {
                                     <ScanBarcode size={21} />
                                 </button>
                             </div>
-
+                            {showScanner && (
+                                <BarcodeScanner
+                                    onScan={handleScannedBarcode}
+                                    onClose={() => setShowScanner(false)}
+                                />
+                            )}
                             {search.trim() && (
                                 <p className="mt-2 text-xs text-slate-500">
                                     {filteredProducts.length} matching products
                                 </p>
                             )}
                         </section>
-                        {showScanner && (
-                            <BarcodeScanner
-                                onScan={handleScannedBarcode}
-                                onClose={() => setShowScanner(false)}
-                            />
-                        )}
+
 
                         {/* Search results */}
                         {search.trim() && (

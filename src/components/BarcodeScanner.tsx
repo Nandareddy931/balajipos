@@ -2,6 +2,10 @@
 import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import {
+    BarcodeFormat,
+    DecodeHintType,
+} from "@zxing/library";
+import {
     X,
     Camera,
     ScanBarcode,
@@ -20,6 +24,7 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
 
     const lastBarcodeRef = useRef("");
     const lastSeenAtRef = useRef(0);
+    const scanLockedRef = useRef(false);
 
     const [error, setError] = useState("");
     const [starting, setStarting] = useState(true);
@@ -27,30 +32,46 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
     const [selectedDevice, setSelectedDevice] = useState("");
     const [lastScanned, setLastScanned] = useState("");
 
-    // Always use the latest billing callback without restarting the camera.
     useEffect(() => {
         onScanRef.current = onScan;
     }, [onScan]);
 
     useEffect(() => {
-        const reader = new BrowserMultiFormatReader();
-
-        let controls: { stop: () => void } | undefined;
         let active = true;
+        let controls: { stop: () => void } | undefined;
+
+        const hints = new Map();
+
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+            BarcodeFormat.EAN_13,
+            BarcodeFormat.EAN_8,
+            BarcodeFormat.UPC_A,
+            BarcodeFormat.UPC_E,
+        ]);
+
+        const reader = new BrowserMultiFormatReader(hints);
 
         const startScanner = async () => {
             try {
                 setStarting(true);
                 setError("");
 
-                // Request camera permission.
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: { ideal: "environment" },
-                    },
-                });
+                if (!navigator.mediaDevices?.getUserMedia) {
+                    throw new Error(
+                        "Camera access is unavailable. Open this app using HTTPS."
+                    );
+                }
 
-                stream.getTracks().forEach((track) => track.stop());
+                // Request permission so camera labels become available.
+                const permissionStream =
+                    await navigator.mediaDevices.getUserMedia({
+                        audio: false,
+                        video: {
+                            facingMode: { ideal: "environment" },
+                        },
+                    });
+
+                permissionStream.getTracks().forEach((track) => track.stop());
 
                 if (!active) return;
 
@@ -60,22 +81,22 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
                 if (!active) return;
 
                 if (cameras.length === 0) {
-                    throw new Error("No camera found.");
+                    throw new Error("No camera found on this device.");
                 }
 
                 setDevices(cameras);
 
-                // Prefer a physical rear camera.
+                // Prefer the rear camera.
                 const preferredCamera =
                     cameras.find((device) =>
-                        /back|rear|environment/i.test(device.label)
+                        /back|rear|environment|world/i.test(device.label)
                     ) ||
                     cameras.find((device) =>
                         !/obs|virtual|droidcam|manycam/i.test(device.label)
                     ) ||
                     cameras[0];
 
-                // Select the default camera on first opening.
+                // Select the preferred camera on the first opening.
                 if (!selectedDevice) {
                     setSelectedDevice(preferredCamera.deviceId);
                     return;
@@ -90,46 +111,102 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
                     return;
                 }
 
-                if (!videoRef.current) return;
+                const video = videoRef.current;
 
-                // Continuous scanning: the camera stays active after a scan.
-                controls = await reader.decodeFromVideoDevice(
-                    selectedDevice,
-                    videoRef.current,
+                if (!video) return;
+
+                // Request a higher-resolution camera stream for clearer
+                // barcode images, especially with small product packaging.
+                const newControls = await reader.decodeFromConstraints(
+                    {
+                        audio: false,
+                        video: {
+                            deviceId: { exact: selectedDevice },
+                            facingMode: { ideal: "environment" },
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            frameRate: { ideal: 30 },
+                        },
+                    },
+                    video,
                     (result) => {
-                        if (!active) return;
-
-                        if (result) {
-                            const barcode = result.getText().trim();
-                            const now = Date.now();
-
-                            // Ignore repeated detections of the same
-                            // barcode while it remains in view.
-                            if (
-                                barcode === lastBarcodeRef.current &&
-                                now - lastSeenAtRef.current < 1200
-                            ) {
-                                lastSeenAtRef.current = now;
-                                return;
-                            }
-
-                            // A different barcode or a barcode
-                            // seen again after leaving the frame.
-                            lastBarcodeRef.current = barcode;
-                            lastSeenAtRef.current = now;
-
-                            setLastScanned(barcode);
-                            onScanRef.current(barcode);
-                        } else if (
-                            lastBarcodeRef.current &&
-                            Date.now() - lastSeenAtRef.current > 1200
-                        ) {
-                            // Allow the same product to be scanned
-                            // again after it leaves the camera view.
-                            lastBarcodeRef.current = "";
+                        if (!active || !result || scanLockedRef.current) {
+                            return;
                         }
+
+                        const barcode = result.getText().trim();
+
+                        if (!barcode) return;
+
+                        const now = Date.now();
+
+                        // Prevent the same barcode from being processed
+                        // repeatedly while it remains in front of the camera.
+                        if (
+                            barcode === lastBarcodeRef.current &&
+                            now - lastSeenAtRef.current < 1500
+                        ) {
+                            lastSeenAtRef.current = now;
+                            return;
+                        }
+
+                        lastBarcodeRef.current = barcode;
+                        lastSeenAtRef.current = now;
+
+                        // Lock briefly while the product is processed.
+                        scanLockedRef.current = true;
+
+                        setLastScanned(barcode);
+                        onScanRef.current(barcode);
+
+                        window.setTimeout(() => {
+                            if (active) {
+                                scanLockedRef.current = false;
+                            }
+                        }, 700);
                     }
                 );
+
+                // The component may have unmounted while the camera
+                // was starting. Stop the newly created camera immediately.
+                if (!active) {
+                    newControls.stop();
+                    return;
+                }
+
+                controls = newControls;
+
+                // Ensure the video element starts playing.
+                await video.play().catch(() => {
+                    // ZXing normally starts playback itself.
+                });
+
+                if (!active) {
+                    controls?.stop();
+                    return;
+                }
+
+                // Enable continuous autofocus when the browser supports it.
+                const stream = video.srcObject as MediaStream | null;
+                const track = stream?.getVideoTracks()[0];
+
+                if (track) {
+                    const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
+                        focusMode?: string[];
+                    };
+
+                    if (capabilities.focusMode?.includes("continuous")) {
+                        await track.applyConstraints({
+                            advanced: [
+                                {
+                                    focusMode: "continuous",
+                                } as MediaTrackConstraintSet,
+                            ],
+                        }).catch(() => {
+                            // Autofocus is optional; not all cameras support it.
+                        });
+                    }
+                }
             } catch (err) {
                 if (active) {
                     setError(
@@ -148,6 +225,13 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
         return () => {
             active = false;
             controls?.stop();
+
+            const video = videoRef.current;
+
+            if (video?.srcObject instanceof MediaStream) {
+                video.srcObject.getTracks().forEach((track) => track.stop());
+                video.srcObject = null;
+            }
         };
     }, [selectedDevice]);
 
@@ -181,11 +265,21 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
                 className="h-full w-full bg-black object-cover"
                 muted
                 playsInline
+                autoPlay
             />
 
-            {/* Larger scanning guide - visual only */}
-            <div className="pointer-events-none absolute inset-x-3 top-1/2 z-10 h-16 -translate-y-1/2 rounded-lg border-2 border-emerald-400/80">
-                <span className="absolute inset-x-0 top-1/2 h-0.5 animate-pulse bg-emerald-400" />
+            {/* Wide, forgiving scanning guide */}
+            <div className="pointer-events-none absolute inset-x-4 top-1/2 z-10 h-28 -translate-y-1/2 rounded-2xl border-2 border-emerald-400/80">
+                <div className="absolute inset-0 rounded-2xl bg-emerald-400/5" />
+
+                <span className="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl-xl border-l-4 border-t-4 border-emerald-400" />
+                <span className="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr-xl border-r-4 border-t-4 border-emerald-400" />
+                <span className="absolute -bottom-0.5 -left-0.5 h-5 w-5 rounded-bl-xl border-b-4 border-l-4 border-emerald-400" />
+                <span className="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-br-xl border-b-4 border-r-4 border-emerald-400" />
+            </div>
+
+            <div className="pointer-events-none absolute bottom-11 left-0 right-0 z-10 text-center text-xs font-medium text-white drop-shadow">
+                Place barcode anywhere in camera view
             </div>
 
             {/* Camera loading */}
@@ -196,7 +290,7 @@ function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
                 </div>
             )}
 
-            {/* Last scanned product barcode */}
+            {/* Last scanned barcode */}
             {!starting && lastScanned && !error && (
                 <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2 rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white">
                     <CheckCircle2 size={15} />

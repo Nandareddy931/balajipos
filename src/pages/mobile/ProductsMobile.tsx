@@ -427,6 +427,13 @@ function ProductsMobile() {
                         </button>
                     )}
                 </section>
+                {/* Barcode Scanner */}
+                {showScanner && (
+                    <BarcodeScanner
+                        onScan={handleBarcodeScan}
+                        onClose={() => setShowScanner(false)}
+                    />
+                )}
 
                 {/* Three compact mobile indicators from reference */}
                 <section className="grid grid-cols-3 gap-2">
@@ -642,13 +649,7 @@ function ProductsMobile() {
                     </button>
                 </div>
             </nav>
-            {/* Barcode Scanner */}
-            {showScanner && (
-                <BarcodeScanner
-                    onScan={handleBarcodeScan}
-                    onClose={() => setShowScanner(false)}
-                />
-            )}
+
 
             {/* Add / Edit Product form */}
             {showForm && (
